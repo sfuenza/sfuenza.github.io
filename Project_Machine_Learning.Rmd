@@ -1,0 +1,193 @@
+---
+output: pdf_document
+---
+#Predicting "How well we do barbell lifts?" using data from Sports Devices
+
+Sebastián Fuenzalida Garcés  
+August 2015
+
+##Executive Summary
+
+
+##Load Data
+
+First we need to read the files (included in the repo). After an analysis of the data, to avoid problems with missing data I decided to consider as NA's: ["NA", "#DIV/0!", ""], considering them as moments when the user didn't do anything or problems with the devices gathering the data.
+
+```{r load_data, echo=TRUE,warning=FALSE, message=FALSE}
+library(AppliedPredictiveModeling); library(caret); library(rattle); library(randomForest); library(doParallel); library(rpart); library(rpart.plot); library(e1071); library(ROCR); library(mlearning)
+registerDoParallel(cores=2)
+
+train_data<-read.csv("pml-training.csv",header=TRUE,na.strings=c("NA","#DIV/0!","")) 
+test_data<-read.csv("pml-testing.csv",header=TRUE,na.strings=c("NA","#DIV/0!",""))
+```
+
+###Relevant Data
+
+Looking at the data we can classify the columns in 3 categories:
+-Useful Data: Variables that we will use in the model
+-Not Useful Data: Variables that don't have any relation with the classe
+-Data with too many NA's: variables where more than 80% of the rows are NA's so we are not going to include them in the model
+
+Considering that we modify the train and test data to have only the useful columns:
+
+```{r drop_columns1,echo=TRUE}
+#First 7 columns aren't useful for the model (name, time, window, etc...)
+train_data<-train_data[,8:length(train_data)]
+test_data<-test_data[,8:length(test_data)]
+
+#NearZeroVar gives us a first approach of columns that we don't need
+nsv<-nearZeroVar(train_data,saveMetrics=TRUE)
+
+#We exclude the columns that NZV is TRUE (almost all of them are 0 or NA)
+train_data<-train_data[,-which(names(train_data) %in% row.names(nsv[nsv$nzv==TRUE,]))]
+test_data<-test_data[,-which(names(test_data) %in% row.names(nsv[nsv$nzv==TRUE,]))]
+
+dim(train_data)
+```
+
+We see that we still have 118 columns, so we are going to do a deeper selection of variables.
+We are going to find the variables that have some correlation between them using what we learn in Lecture "Preprocessing with PCA", but using a low correlation (10%) to just find avoid the variables that have a lot of NA's and weren't find by the nearZeroVar function.
+
+```{r drop_columns2, echo=TRUE}
+#We exclude the Classe column
+M<-abs(cor(train_data[,-118])); diag(M)<-0
+useful_var<-unique(row.names(which(M>0.1,arr.ind=T)))
+useful_var<-c(useful_var,"classe")
+
+#Now we subset the train and test data using this columns
+vars<-names(train_data) %in% useful_var
+train_data<-train_data[vars]
+test_data<-test_data[vars]
+
+#Just to be sure we check if both data sets have the same columns
+all.equal(names(train_data),names(test_data))
+```
+
+We finally get 53 columns that are going to be part of our model, and the only different column is "classe" in train and "problem_id" in test.
+
+##Model Building
+
+We will test 4 different models to compare their "out of sample error" and choose the better one, the models will be:
+
+-Classifitacion Tree with "Cross Validation" and "PreProcessing"
+-Random Forest with "Cross Validation"
+-Random Forest with "PreProcessing"
+-Random Forest with "Cross Validation" and "Preprocessing"
+
+First we need to split the train data in "training" and "testing" to check the accuracy of the models trained.
+
+```{r create_model, echo=TRUE}
+set.seed(110567)
+inTrain<-createDataPartition(y=train_data$classe,p=0.70,list=FALSE)
+training<-train_data[inTrain,]
+testing<-train_data[-inTrain,]
+```
+
+Because of the time it takes to train each model, I decided to SAVE the resulting models in RDS files and load them to make the predictions, but the code used for each of them is ther but not running.
+
+###Model 1: Classification Tree with Cross Validation and PreProcessing
+
+```{r Tree_model, echo=TRUE, eval=FALSE}
+set.seed(110567)
+##We train the First Model
+modFit_tree <- train(classe ~ .,  preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4,allowParallel=TRUE), data = training, method="rpart")
+```
+
+```{r Tree_model_pred,echo=TRUE}
+#We load the model
+modFit_tree<-readRDS("modFit_tree.RDS")
+##We predict the values with the model
+predic_tree<-predict(modFit_tree,newdata=testing)
+#Now we compare the predictions with the real data
+confusionMatrix(predic_tree,testing$classe)
+```
+
+We can see that the model have a 58.78% of accuracy meaning a 0.4122 out of sample error, not a really good result.
+In the Appendix we can see the plot of the Tree (Figure 1)
+
+###Model 2: Random Forest with Cross Validation
+
+```{r RF_mode1, echo=TRUE, eval=FALSE}
+set.seed(110567)
+modFit_Fo_cv<-train(classe ~ ., method="rf", trControl=trainControl(method = "cv", number = 4,allowParallel=TRUE), data=training)
+```
+
+```{r RF_mode1_pred,echo=TRUE}
+modFit_Fo_cv<-readRDS("modFit_Fo_cv.RDS")
+predic_Fo_cv<-predict(modFit_Fo_cv,newdata=testing)
+confusionMatrix(predic_Fo_cv,testing$classe)
+```
+
+Using Random Forest with Cross Validation we obtained a much better result with 99.32% accuracy (an interval of [99.08% - 99.51]), meaning a 0.0068 out of sample error.
+
+###Model 3: Random Forest with PreProcessing
+
+```{r RF_mode2,echo=TRUE,eval=FALSE}
+set.seed(110567)
+modFit_Fo_pp<-train(classe ~ ., method="rf", preProcess=c("center", "scale"), data=training)
+```
+
+```{r RF_mode2_pred,echo=TRUE}
+modFit_Fo_pp<-readRDS("modFit_Fo_pp.RDS")
+predic_Fo_pp<-predict(modFit_Fo_pp,newdata=testing)
+confusionMatrix(predic_Fo_pp,testing$classe)
+```
+
+In the case of using Rando Forest with PreProcessing but not Cross Validation we obtained 99.34% of accuracy, almost the same of the last one, and a 0.0066 out of sample error.
+
+###Model 4: Random Forest with Cross Validation and PreProcessing
+
+```{r RF_mode3, echo=TRUE, eval=FALSE}
+set.seed(110567)
+modFit_Fo_cvpp<-train(classe~.,data=training,preProcess=c("center","scale"),trControl=trainControl(method="cv",number=4,allowParallel=TRUE),method="rf")
+```
+
+```{r RF_mode3_pred, echo=TRUE}
+modFit_Fo_cvpp<-readRDS("modFit_Fo_cvpp.RDS")
+predic_Fo_cvpp<-predict(modFit_Fo_cvpp,newdata=testing)
+confusionMatrix(predic_Fo_cvpp,testing$classe)
+```
+
+Using both, Cross Validation and PreProcessing gives us a accuracy of 99.32%, same as the one with only Cross Validation. 
+
+###Model Comparison
+
+Now we compare the results
+
+-Clasification Tree with CV and PP:  58.78%  Accuracy - 0.4122 Sample Error  
+-Random Forest with CV:              99.32%  Accuracy - 0.0068 Sample Error  
+-Random Forest with PP:              99.34%  Accuracy - 0.0066 Sample Error  
+-Random Forest with CV and PP:       99.32%  Accuracy - 0.0068 Sample Error
+ 
+We can see that clearly the Random Forest gives better results, as expected, and both Preprocessing and Cross Validation gives almost the same results.
+
+In the Figure 2 of the Appendix we can see the plots of the error of the 3 models with Random Forest, showing similar results, and on each of them the comparison between the different classes.
+
+##Applied best Model to Test Cases
+
+Considering the comparison we are going to use the Random Forest with Preprocessing to get the best prediction of the Test Cases.
+
+```{r test_case, echo=TRUE}
+predict(modFit_Fo_cvpp,newdata=test_data)
+```
+
+##Appendix
+
+###Figure 1
+
+```{r Tree_mod_plot,echo=FALSE}
+fancyRpartPlot(modFit_tree$finalModel)
+```
+
+###Figure 2
+
+```{r Plot_comparison, echo=FALSE}
+plot(modFit_Fo_cv$finalModel,log="y",main="Random Forest with Cross Validation")
+legend("topright", colnames((modFit_Fo_cv$finalModel)$err.rate),col=1:6,cex=0.6,fill=1:6)
+plot(modFit_Fo_pp$finalModel,log="y",main="Random Forest with PreProcession")
+legend("topright", colnames((modFit_Fo_pp$finalModel)$err.rate),col=1:6,cex=0.6,fill=1:6)
+plot(modFit_Fo_cvpp$finalModel,log="y",main="RF with Cross Validation and PreProcessing")
+legend("topright", colnames((modFit_Fo_cvpp$finalModel)$err.rate),col=1:6,cex=0.6,fill=1:6)
+```
+
+
